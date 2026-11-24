@@ -603,7 +603,7 @@ function openSettings() {
     <button class="btn primary block" id="sSave">Save</button>
     <div class="field" style="border-top:1px solid var(--line);padding-top:14px"><span>Backup</span>
       <button class="btn block" id="bkDown">Download backup (all months)</button></div>
-    <label class="field"><span>Import (paste a backup or data from Claude)</span><textarea id="impText" rows="3" placeholder='{"months": { ... }}'></textarea></label>
+    <label class="field"><span>Import (paste an import link or a backup)</span><textarea id="impText" rows="3" placeholder="https://…#import=…"></textarea></label>
     <div class="err" id="impErr" hidden></div>
     <button class="btn block" id="impBtn">Import</button>`);
   $("#closeS").onclick = closeSheet;
@@ -616,6 +616,8 @@ function openSettings() {
   };
 }
 
+const decodeImport = code => new TextDecoder().decode(Uint8Array.from(atob(code.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0)));
+
 /* One-tap import: a link ending in #import=<base64url JSON>. The part after # never reaches the server. */
 function checkImportLink() {
   const h = location.hash;
@@ -623,8 +625,7 @@ function checkImportLink() {
   try { history.replaceState(null, "", location.pathname + location.search); } catch {}
   let text, n = 0;
   try {
-    const b = h.slice(8).replace(/-/g, "+").replace(/_/g, "/");
-    text = new TextDecoder().decode(Uint8Array.from(atob(b), c => c.charCodeAt(0)));
+    text = decodeImport(h.slice(8));
     const o = JSON.parse(text);
     for (const m of Object.values(o.months || {})) n += Array.isArray(m.shifts) ? m.shifts.length : 0;
   } catch { toast("That import link is incomplete. Copy the whole link and try again."); return; }
@@ -647,7 +648,11 @@ async function downloadBackup() {
 /* Merge a backup into the store: adds shifts not already there (same date + start + end), adds missing extras, takes paidUntil. */
 async function importData(text) {
   const fail = m => { const e = $("#impErr"); if (e) { e.textContent = m; e.hidden = false; } };
-  let obj; try { obj = JSON.parse(text); } catch { fail("That isn't valid backup data. Paste the whole block, from { to }."); return; }
+  text = String(text || "").trim();
+  // Also accept an import link (…#import=…) or just its code
+  const code = text.includes("#import=") ? text.split("#import=")[1] : (/^[A-Za-z0-9_-]{20,}$/.test(text) ? text : null);
+  if (code) { try { text = decodeImport(code.trim()); } catch { fail("That link is incomplete. Copy the whole link and try again."); return; } }
+  let obj; try { obj = JSON.parse(text); } catch { fail("That isn't valid data. Paste the whole import link or backup."); return; }
   const months = obj && obj.months;
   if (!months || typeof months !== "object") { fail("No months found in that data."); return; }
   const okT = v => /^\d{2}:\d{2}$/.test(v);
