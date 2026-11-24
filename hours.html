@@ -596,7 +596,13 @@ function openSettings() {
       <button class="btn block" id="bkDown">Download backup (all months)</button></div>
     <label class="field"><span>Import (paste an import link or a backup)</span><textarea id="impText" rows="3" placeholder="https://…#import=…"></textarea></label>
     <div class="err" id="impErr" hidden></div>
-    <button class="btn block" id="impBtn">Import</button>`);
+    <button class="btn block" id="impBtn">Import</button>
+    <div class="field" style="border-top:1px solid var(--line);padding-top:14px"><span>Empty this month</span>
+      <button class="btn ghost danger block" id="wipeBtn">Delete everything in ${esc(monthLabel(S.month))}</button></div>`);
+  { const w = $("#wipeBtn"); let armed = false; w.onclick = () => {
+      if (!armed) { armed = true; w.textContent = `Tap again: deletes ${S.data.shifts.length} shifts and ${S.data.extras.length} extras`; setTimeout(() => { armed = false; if (w.isConnected) w.textContent = `Delete everything in ${monthLabel(S.month)}`; }, 4000); return; }
+      S.data = { ...blankMonth(), seed: S.data.seed }; saveMonth(); closeSheet(); render(); toast(`${monthLabel(S.month)} emptied`);
+  }; }
   $("#closeS").onclick = closeSheet;
   $("#bkDown").onclick = downloadBackup;
   $("#impBtn").onclick = () => importData($("#impText").value);
