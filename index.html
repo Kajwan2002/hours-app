@@ -7,7 +7,7 @@
 <meta name="theme-color" content="#0D0F11" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="app-build" content="20261124140922">
+<meta name="app-build" content="20261124141021">
 <style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px/1.4 system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
 </head>
 <body><title>Work Hours</title>
@@ -740,11 +740,11 @@ const pdfMonth = () => TX().months[+S.month.slice(5) - 1] + " " + S.month.slice(
 const pdfSub = () => [S.settings.name, pdfMonth()].filter(Boolean).join("  ·  ");
 const fileBase = () => (S.settings.name ? S.settings.name.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-") + "_" : "") + S.month;
 
-/* Always one A4 page: shrink rows (font + padding) until the table and signature fit. */
+/* Always one A4 page: shrink rows (font + padding) until the table fits. */
 function downloadSheet(mode) {
   if (!window.jspdf || !window.jspdf.jsPDF) { toast("PDF tools are still loading. Try again."); return; }
   const rowsN = sheetRows(mode).length + 3;           // body + head + foot + month dividers (approx.)
-  const avail = 297 - 42 - 12 - 26;                   // page − header − bottom margin − signature
+  const avail = 297 - 42 - 12;                        // page − header − bottom margin
   let s = Math.min(1, avail / (rowsN * 9.3));         // 9.3 mm ≈ one row at full size
   let doc;
   for (let i = 0; i < 12; i++) {
@@ -782,15 +782,6 @@ function buildSheet(mode, s) {
     columnStyles: { [head.length - 1]: { halign: "right" } },
     didParseCell: d => { if (d.column.index === head.length - 1) d.cell.styles.halign = "right"; },
   });
-  // Signature lines: below the table, never on a second page
-  if (doc.getNumberOfPages() === 1) {
-    const y = doc.lastAutoTable.finalY + 18;
-    if (y > 285) { doc.addPage(); return doc; } // no room for the signature: forces a smaller retry
-    doc.setDrawColor(150); doc.setLineWidth(0.3);
-    doc.line(20, y, 85, y); doc.line(125, y, 190, y);
-    doc.setFontSize(8.5); doc.setTextColor(120);
-    doc.text(T.signDate, 20, y + 5); doc.text(T.sign, 125, y + 5);
-  }
   return doc;
 }
 
