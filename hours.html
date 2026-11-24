@@ -605,6 +605,27 @@ function openSettings() {
   };
 }
 
+/* One-tap import: a link ending in #import=<base64url JSON>. The part after # never reaches the server. */
+function checkImportLink() {
+  const h = location.hash;
+  if (!h.startsWith("#import=")) return;
+  try { history.replaceState(null, "", location.pathname + location.search); } catch {}
+  let text, n = 0;
+  try {
+    const b = h.slice(8).replace(/-/g, "+").replace(/_/g, "/");
+    text = new TextDecoder().decode(Uint8Array.from(atob(b), c => c.charCodeAt(0)));
+    const o = JSON.parse(text);
+    for (const m of Object.values(o.months || {})) n += Array.isArray(m.shifts) ? m.shifts.length : 0;
+  } catch { toast("That import link is incomplete. Copy the whole link and try again."); return; }
+  sheet(`
+    <div class="head"><h2>Import hours</h2><button class="x" id="closeS" aria-label="Close">×</button></div>
+    <p style="margin:0">This link adds ${n} shift${n === 1 ? "" : "s"} to this app. Shifts that are already here are skipped.</p>
+    <div class="err" id="impErr" hidden></div>
+    <button class="btn primary block" id="impGo">Import ${n} shift${n === 1 ? "" : "s"}</button>`);
+  $("#closeS").onclick = closeSheet;
+  $("#impGo").onclick = () => importData(text);
+}
+
 async function downloadBackup() {
   let months;
   try { months = await Store.listMonths(); } catch { toast("Couldn't read your data for the backup."); return; }
@@ -765,7 +786,7 @@ render();
   try { if (window.claude && window.claude.use) { db = await window.claude.use("db"); downloads = await window.claude.use("downloads"); } } catch {}
   if (db) { Store.mode = "db"; Store.db = db; }
   else { Store.mode = "local"; note("Your hours are saved in this browser only."); }
-  watchSettings(); subscribe();
+  watchSettings(); subscribe(); checkImportLink();
 })();
 })();
 </script>
