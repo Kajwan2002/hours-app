@@ -136,6 +136,13 @@ td{border-bottom:1px solid var(--line)}
 td.r,th.r{text-align:right}
 tfoot td{font-weight:700;border-bottom:0}
 .cut{color:var(--over);font-size:.72rem;margin-left:4px}
+.period{margin:12px 0 0;padding-top:10px;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+.shift.later{opacity:.55}
+.chip.next{background:var(--accent-soft);color:var(--accent)}
+tr.mh td{background:var(--bg);font-weight:600;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.paidrow{display:flex;gap:8px}
+.paidrow .btn{flex:none;padding:8px 12px;font-size:.85rem}
+textarea{width:100%;border:1px solid var(--line);background:var(--bg);border-radius:10px;padding:10px 12px;font:13px/1.4 var(--f-mono);resize:vertical}
 .dl{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-top:1px solid var(--line)}
 .dl:first-child{border-top:0}
 .dl>div{min-width:0}
@@ -181,6 +188,7 @@ tfoot td{font-weight:700;border-bottom:0}
       <div class="stat"><span>Left to <i id="stQuota">80</i>h</span><b class="num" id="stLeft">80:00</b></div>
       <div class="stat ot"><span>Overtime</span><b class="num" id="stOt">0:00</b></div>
     </div>
+    <p class="period" id="periodNote" hidden></p>
   </section>
   <p class="notice" id="storeNote" hidden></p>
 
@@ -232,12 +240,18 @@ const S = {
   month: lsGet("hrs.month", todayKey.slice(0, 7)),
   tab: "shifts",
   exportView: "80",
-  settings: { name: "", rate: 18, quota: 80, showPlace: false },
-  data: { shifts: [], extras: [], seed: 1 },
+  settings: { name: "", rate: 18, quota: 80, showPlace: false, lang: "de" },
+  data: { shifts: [], extras: [], seed: 1, paidUntil: "" },
+  prev: { shifts: [], extras: [], seed: 1, paidUntil: "" },
   loaded: false,
 };
 if (!/^\d{4}-\d{2}$/.test(S.month)) S.month = todayKey.slice(0, 7);
-const blankMonth = () => ({ shifts: [], extras: [], seed: Math.floor(Math.random() * 1e9) });
+const blankMonth = () => ({ shifts: [], extras: [], seed: Math.floor(Math.random() * 1e9), paidUntil: "" });
+const norm = d => d ? { shifts: d.shifts || [], extras: d.extras || [], seed: d.seed || 1, paidUntil: d.paidUntil || "" } : blankMonth();
+const addMonths = (key, n) => { const [y, m] = key.split("-").map(Number); const d = new Date(y, m - 1 + n, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
+const monthName = key => MONTHS[+key.slice(5, 7) - 1];
+const prevKey = () => addMonths(S.month, -1);
+const shortDate = d => { const x = parseDate(d); return x.getDate() + " " + MONTHS[x.getMonth()].slice(0, 3); };
 
 /* ---------- storage: claude db, with on-device fallback ---------- */
 const Store = {
@@ -248,6 +262,16 @@ const Store = {
     }
     cb(lsGet("hrs.doc." + path, null), { fromCache: false });
     return () => {};
+  },
+  async get(path) {
+    if (this.mode === "db") { const s = await this.db.doc(path).get(); return s.exists ? s.data() : null; }
+    return lsGet("hrs.doc." + path, null);
+  },
+  async listMonths() {
+    const out = {};
+    if (this.mode === "db") { const q = await this.db.collection("months").get(); q.docs.forEach(d => out[d.id] = d.data()); return out; }
+    try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith("hrs.doc.months/")) out[k.slice(15)] = lsGet(k, null); } } catch {}
+    return out;
   },
   save(path, data) {
     const body = JSON.parse(JSON.stringify(data));
@@ -266,14 +290,15 @@ const Store = {
   }
 };
 
-let unsubMonth = () => {}, unsubSettings = () => {}, loadTimer = null;
+let unsubMonth = () => {}, unsubPrev = () => {}, unsubSettings = () => {}, loadTimer = null;
 function subscribe() {
-  unsubMonth(); clearTimeout(loadTimer);
-  const key = S.month; S.loaded = false;
+  unsubMonth(); unsubPrev(); clearTimeout(loadTimer);
+  const key = S.month, pk = prevKey(); S.loaded = false;
+  unsubPrev = Store.watch("months/" + pk, d => { if (key !== S.month) return; S.prev = norm(d); render(); });
   if (Store.mode === "db") loadTimer = setTimeout(() => { if (!S.loaded) note("Still connecting… your hours may not be up to date yet."); }, 10000);
   unsubMonth = Store.watch("months/" + key, (d, meta) => {
     if (key !== S.month) return;
-    S.data = d ? { shifts: d.shifts || [], extras: d.extras || [], seed: d.seed || 1 } : blankMonth();
+    S.data = norm(d);
     if (!meta.fromCache) { S.loaded = true; clearTimeout(loadTimer); if (Store.mode === "db") note(""); }
     render();
   });
@@ -288,8 +313,13 @@ const saveSettings = () => Store.save("settings/main", S.settings);
 function note(t) { const n = $("#storeNote"); n.textContent = t; n.hidden = !t; }
 
 /* ---------- calculations ---------- */
-const sorted = () => [...S.data.shifts].sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
-const totalMin = () => S.data.shifts.reduce((t, s) => t + durOf(s), 0);
+/* A month's period: its own shifts up to "paid until", plus last month's shifts after last month's "paid until". */
+const byTime = (a, b) => (a.date + a.start).localeCompare(b.date + b.start);
+const carriedIn = () => S.prev.paidUntil ? S.prev.shifts.filter(s => s.date > S.prev.paidUntil).map(s => ({ ...s, _m: prevKey() })) : [];
+const isLater = s => !!S.data.paidUntil && s.date > S.data.paidUntil;
+const periodRows = () => [...carriedIn(), ...S.data.shifts.filter(s => !isLater(s)).map(s => ({ ...s, _m: S.month }))];
+const sorted = () => periodRows().sort(byTime);
+const totalMin = () => periodRows().reduce((t, s) => t + durOf(s), 0);
 const quotaMin = () => Math.round((+S.settings.quota || 80) * 60);
 const otMin = () => Math.max(0, totalMin() - quotaMin());
 
@@ -324,7 +354,11 @@ function render() {
   const scale = Math.max(q, tot);
   $("#barNormal").style.width = (Math.min(tot, q) / scale * 100) + "%";
   $("#barOt").style.width = (ot / scale * 100) + "%";
-  $("#stShifts").textContent = S.data.shifts.length;
+  $("#stShifts").textContent = periodRows().length;
+  const ci = carriedIn(), pn = [];
+  if (ci.length) pn.push(`Includes ${hm(ci.reduce((t, s) => t + durOf(s), 0))} from ${monthName(prevKey())} (after ${shortDate(S.prev.paidUntil)})`);
+  if (S.data.paidUntil) pn.push(`Paid until ${shortDate(S.data.paidUntil)}, later shifts count for ${monthName(addMonths(S.month, 1))}`);
+  $("#periodNote").textContent = pn.join(" · "); $("#periodNote").hidden = !pn.length;
   $("#stQuota").textContent = +S.settings.quota || 80;
   $("#stLeft").textContent = hm(Math.max(0, q - tot));
   $("#stOt").textContent = hm(ot);
@@ -334,10 +368,20 @@ function render() {
 }
 
 function renderShifts() {
-  const list = sorted();
+  const carried = carriedIn().sort(byTime);
+  const list = S.data.shifts.map(s => ({ ...s, _m: S.month })).sort(byTime);
+  const nextName = monthName(addMonths(S.month, 1));
+  const row = s => { const d = parseDate(s.date), later = s._m === S.month && isLater(s); return `
+        <button class="shift${later ? " later" : ""}" data-id="${esc(s.id)}" data-m="${s._m}">
+          <div class="day"><b class="num">${pad(d.getDate())}</b><span>${WD[d.getDay()]}</span></div>
+          <div class="mid"><span class="times num">${esc(s.start)}–${esc(s.end)}</span><span class="chip ${s.place === "home" ? "home" : "office"}">${s.place === "home" ? "Home" : "Office"}</span>${later ? `<span class="chip next">→ ${nextName}</span>` : ""}</div>
+          <div class="dur num">${hm(durOf(s))}</div>
+        </button>`; };
+  const carriedHtml = carried.length ? `<div class="section"><div class="label" style="display:flex;justify-content:space-between"><span>From ${monthName(prevKey())} · after paid date</span><span class="num">${hm(carried.reduce((t, s) => t + durOf(s), 0))}</span></div><div class="list">${carried.map(row).join("")}</div></div>` : "";
+  const bind = () => { const all = [...carried, ...list]; document.querySelectorAll(".shift").forEach(b => b.onclick = () => openShift(all.find(s => s.id === b.dataset.id && s._m === b.dataset.m), b.dataset.m)); };
   if (!list.length) {
-    $("#view").innerHTML = `<div class="section"><div class="empty"><b>No shifts in ${esc(monthLabel(S.month))}</b>Tap <strong>Add shift</strong> to log your first day. Office is selected by default.</div></div>`;
-    return;
+    $("#view").innerHTML = carriedHtml + `<div class="section"><div class="empty"><b>No shifts in ${esc(monthLabel(S.month))}</b>Tap <strong>Add shift</strong> to log your first day. Office is selected by default.</div></div>`;
+    bind(); return;
   }
   // split into weeks for readability
   const weeks = [];
@@ -346,17 +390,12 @@ function renderShifts() {
     const k = mon.toDateString(); let w = weeks.find(x => x.k === k);
     if (!w) weeks.push(w = { k, mon, items: [] }); w.items.push(s);
   });
-  $("#view").innerHTML = weeks.map(w => {
-    const sum = w.items.reduce((t, s) => t + durOf(s), 0);
+  $("#view").innerHTML = carriedHtml + weeks.map(w => {
+    const sum = w.items.filter(s => !isLater(s)).reduce((t, s) => t + durOf(s), 0);
     return `<div class="section"><div class="label" style="display:flex;justify-content:space-between"><span>Week of ${w.mon.getDate()} ${MONTHS[w.mon.getMonth()].slice(0,3)}</span><span class="num">${hm(sum)}</span></div>
-      <div class="list">${w.items.map(s => { const d = parseDate(s.date); return `
-        <button class="shift" data-id="${esc(s.id)}">
-          <div class="day"><b class="num">${pad(d.getDate())}</b><span>${WD[d.getDay()]}</span></div>
-          <div class="mid"><span class="times num">${esc(s.start)}–${esc(s.end)}</span><span class="chip ${s.place === "home" ? "home" : "office"}">${s.place === "home" ? "Home" : "Office"}</span></div>
-          <div class="dur num">${hm(durOf(s))}</div>
-        </button>`; }).join("")}</div></div>`;
+      <div class="list">${w.items.map(row).join("")}</div></div>`;
   }).join("");
-  document.querySelectorAll(".shift").forEach(b => b.onclick = () => openShift(S.data.shifts.find(s => s.id === b.dataset.id)));
+  bind();
 }
 
 function renderOvertime() {
@@ -409,6 +448,35 @@ const billParts = () => {
   return { ot, rate, otPay, exSum, total: otPay + exSum };
 };
 
+/* Month divider rows ("October", "November") when a sheet spans two months. */
+const monthOf = r => r.date.slice(0, 7);
+const needsHead = (rows, i) => new Set(rows.map(monthOf)).size > 1 && (i === 0 || monthOf(rows[i - 1]) !== monthOf(rows[i]));
+const monthHeadHtml = (rows, i, cols) => needsHead(rows, i) ? `<tr class="mh"><td colspan="${cols}">${monthName(monthOf(rows[i]))}</td></tr>` : "";
+
+/* Export language (the app itself stays English). */
+const L10N = {
+  de: {
+    months: ["Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"],
+    days: ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"],
+    hours: "Arbeitszeiten", hoursAll: "Arbeitszeiten (alle Schichten)",
+    cols: { date: "Datum", day: "Tag", place: "Ort", start: "Beginn", end: "Ende", h: "Stunden" },
+    office: "Büro", home: "Homeoffice", total: "Gesamt", signDate: "Datum", sign: "Unterschrift",
+    bill: "Rechnung Überstunden", ot: "Überstunden", sum: "Summe", issued: "Ausgestellt am",
+    num: n => n.toFixed(2).replace(".", ","), money: n => n.toFixed(2).replace(".", ",") + " €",
+    files: { hours: "Arbeitszeiten", all: "Arbeitszeiten-alle", bill: "Rechnung-Ueberstunden" },
+  },
+  en: {
+    months: MONTHS, days: WDL,
+    hours: "Working hours", hoursAll: "Working hours (all shifts)",
+    cols: { date: "Date", day: "Day", place: "Place", start: "Start", end: "End", h: "Hours" },
+    office: "Office", home: "Home", total: "Total", signDate: "Date", sign: "Signature",
+    bill: "Overtime bill", ot: "Overtime", sum: "Total", issued: "Issued",
+    num: n => n.toFixed(2), money: n => "€" + n.toFixed(2),
+    files: { hours: "Hours", all: "Hours-all", bill: "Overtime-bill" },
+  },
+};
+const TX = () => L10N[S.settings.lang === "en" ? "en" : "de"];
+
 function renderExport() {
   const all = S.exportView === "all";
   const t = trimmed(), show = !!S.settings.showPlace;
@@ -422,6 +490,11 @@ function renderExport() {
   else if (tot <= q) msg = `You logged ${hm(tot)} of ${hm(q)}. Nothing is trimmed; all shifts are exported as they are.`;
   else msg = `Logged ${hm(tot)}. ${hm(t.cut)} of overtime removed in small cuts across ${t.touched} shift${t.touched === 1 ? "" : "s"}, home days first. The sheet shows exactly ${hm(outTot)}. The red marks only show here, not in the PDF.`;
   const has = t.rows.length > 0, hasBill = b.ot > 0 || nEx > 0;
+  const lang = S.settings.lang === "en" ? "en" : "de";
+  const nextName = monthName(addMonths(S.month, 1));
+  const [py, pm] = S.month.split("-").map(Number);
+  const ci = carriedIn();
+  if (ci.length && rows.length) msg += ` Includes ${ci.length} shift${ci.length === 1 ? "" : "s"} from ${monthName(prevKey())} after you were paid.`;
   $("#view").innerHTML = `
   <div class="section"><div class="label">Downloads · ${esc(monthLabel(S.month))}</div>
     <div class="list">
@@ -432,6 +505,12 @@ function renderExport() {
   <div class="section"><div class="label">Sheet details</div>
     <div class="card" style="display:flex;flex-direction:column;gap:12px">
       <label class="field"><span>Name on the exports</span><input type="text" id="nameIn" placeholder="Your name" value="${esc(S.settings.name)}"></label>
+      <div class="field"><span>Export language</span><div class="seg" id="langSeg">
+        <button type="button" data-v="de" aria-pressed="${lang === "de"}">Deutsch</button>
+        <button type="button" data-v="en" aria-pressed="${lang === "en"}">English</button></div></div>
+      <div class="field"><span>Paid until (later shifts move to ${nextName})</span><div class="paidrow">
+        <input type="date" id="paidIn" value="${esc(S.data.paidUntil)}" min="${S.month}-01" max="${S.month}-${pad(new Date(py, pm, 0).getDate())}" aria-label="Paid until">
+        <button type="button" class="btn" id="paidClear" ${S.data.paidUntil ? "" : "disabled"}>Whole month</button></div></div>
       <label class="switch"><span>Show Office / Home column</span><input type="checkbox" id="placeIn" ${show ? "checked" : ""}></label>
     </div></div>
   <div class="section"><div class="label" style="display:flex;justify-content:space-between"><span>Preview</span><span class="num">${hm(outTot)}</span></div>
@@ -440,7 +519,7 @@ function renderExport() {
       <button type="button" data-v="all" aria-pressed="${all}">All hours</button></div>
     ${rows.length ? `<div class="sheet-preview"><table>
       <thead><tr><th>Date</th><th>Day</th>${show ? "<th>Place</th>" : ""}<th>Start</th><th>End</th><th class="r">Hours</th></tr></thead>
-      <tbody>${rows.map(r => `<tr><td class="num">${dmy(r.date)}</td><td>${WD[parseDate(r.date).getDay()]}</td>${show ? `<td>${r.place === "home" ? "Home" : "Office"}</td>` : ""}<td class="num">${esc(r.start)}</td><td class="num">${fromMin(toMin(r.start) + r.out)}${r.out !== r.dur ? `<span class="cut">−${hm(r.dur - r.out)}</span>` : ""}</td><td class="r num">${dec(r.out)}</td></tr>`).join("")}</tbody>
+      <tbody>${rows.map((r, i) => monthHeadHtml(rows, i, show ? 6 : 5) + `<tr><td class="num">${dmy(r.date)}</td><td>${WD[parseDate(r.date).getDay()]}</td>${show ? `<td>${r.place === "home" ? "Home" : "Office"}</td>` : ""}<td class="num">${esc(r.start)}</td><td class="num">${fromMin(toMin(r.start) + r.out)}${r.out !== r.dur ? `<span class="cut">−${hm(r.dur - r.out)}</span>` : ""}</td><td class="r num">${dec(r.out)}</td></tr>`).join("")}</tbody>
       <tfoot><tr><td colspan="${show ? 5 : 4}">Total</td><td class="r num">${dec(outTot)}</td></tr></tfoot>
     </table></div>` : ""}
     <p class="hint">${esc(msg)}</p>
@@ -449,6 +528,9 @@ function renderExport() {
   let nt; $("#nameIn").oninput = e => { S.settings.name = e.target.value; clearTimeout(nt); nt = setTimeout(saveSettings, 600); };
   $("#placeIn").onchange = e => { S.settings.showPlace = e.target.checked; saveSettings(); render(); };
   document.querySelectorAll("#viewSeg button").forEach(btn => btn.onclick = () => { S.exportView = btn.dataset.v; render(); });
+  document.querySelectorAll("#langSeg button").forEach(btn => btn.onclick = () => { S.settings.lang = btn.dataset.v; saveSettings(); render(); });
+  $("#paidIn").onchange = e => { const v = e.target.value; if (v && !v.startsWith(S.month)) return; S.data.paidUntil = v || ""; saveMonth(); render(); };
+  $("#paidClear").onclick = () => { S.data.paidUntil = ""; saveMonth(); render(); };
   const rs = $("#reshuffle"); if (rs) rs.onclick = () => { S.data.seed = Math.floor(Math.random() * 1e9); saveMonth(); render(); };
   $("#dl80").onclick = () => downloadSheet("80");
   $("#dlAll").onclick = () => downloadSheet("all");
@@ -467,14 +549,17 @@ function defaultDate() {
   if (todayKey.startsWith(S.month)) return todayKey;
   return S.month + "-01";
 }
-function openShift(existing) {
+function openShift(existing, mk = S.month) {
   const last = lsGet("hrs.lastTimes", { start: "09:00", end: "17:00" });
   const s = existing ? { ...existing } : { id: uid(), date: defaultDate(), start: last.start, end: last.end, place: "office" };
-  const [y, m] = S.month.split("-").map(Number);
+  delete s._m;
+  const target = mk === S.month ? S.data : S.prev;
+  const saveTarget = () => Store.save("months/" + mk, target);
+  const [y, m] = mk.split("-").map(Number);
   const lastDay = new Date(y, m, 0).getDate();
   sheet(`
     <div class="head"><h2>${existing ? "Edit shift" : "Add shift"}</h2><button class="x" id="closeS" aria-label="Close">×</button></div>
-    <label class="field"><span>Date</span><input type="date" id="fDate" value="${s.date}" min="${S.month}-01" max="${S.month}-${pad(lastDay)}"></label>
+    <label class="field"><span>Date</span><input type="date" id="fDate" value="${s.date}" min="${mk}-01" max="${mk}-${pad(lastDay)}"></label>
     <div class="field"><span>Where</span><div class="seg" id="fPlace">
       <button type="button" data-v="office" aria-pressed="${s.place !== "home"}">Office</button>
       <button type="button" data-v="home" aria-pressed="${s.place === "home"}">Home</button></div></div>
@@ -492,18 +577,18 @@ function openShift(existing) {
   $("#closeS").onclick = closeSheet;
   $("#fSave").onclick = () => {
     const date = $("#fDate").value, start = $("#fStart").value, end = $("#fEnd").value, err = $("#fErr");
-    if (!date || !date.startsWith(S.month)) { err.textContent = `Pick a date in ${monthLabel(S.month)}. Switch months at the top to log other months.`; err.hidden = false; return; }
+    if (!date || !date.startsWith(mk)) { err.textContent = `Pick a date in ${monthLabel(mk)}. Switch months at the top to log other months.`; err.hidden = false; return; }
     if (!start || !end) { err.textContent = "Enter both a start and an end time."; err.hidden = false; return; }
     if (start === end) { err.textContent = "Start and end are the same time."; err.hidden = false; return; }
     Object.assign(s, { date, start, end });
-    S.data.shifts = existing ? S.data.shifts.map(x => x.id === s.id ? s : x) : [...S.data.shifts, s];
+    target.shifts = existing ? target.shifts.map(x => x.id === s.id ? s : x) : [...target.shifts, s];
     lsSet("hrs.lastTimes", { start, end });
-    saveMonth(); closeSheet(); render(); toast(existing ? "Shift updated" : `Saved · ${hm(durOf(s))}`);
+    saveTarget(); closeSheet(); render(); toast(existing ? "Shift updated" : `Saved · ${hm(durOf(s))}`);
   };
   const del = $("#fDel");
   if (del) { let armed = false; del.onclick = () => {
     if (!armed) { armed = true; del.textContent = "Tap again to delete"; setTimeout(() => { armed = false; if (del.isConnected) del.textContent = "Delete shift"; }, 3000); return; }
-    S.data.shifts = S.data.shifts.filter(x => x.id !== s.id); saveMonth(); closeSheet(); render(); toast("Shift deleted");
+    target.shifts = target.shifts.filter(x => x.id !== s.id); saveTarget(); closeSheet(); render(); toast("Shift deleted");
   }; }
 }
 
@@ -515,13 +600,65 @@ function openSettings() {
       <label class="field"><span>Overtime rate (€/h)</span><input type="number" id="sRate" min="0" step="0.5" inputmode="decimal" value="${+S.settings.rate || 0}"></label>
     </div>
     <label class="field"><span>Name on exports</span><input type="text" id="sName" value="${esc(S.settings.name)}" placeholder="Your name"></label>
-    <button class="btn primary block" id="sSave">Save</button>`);
+    <button class="btn primary block" id="sSave">Save</button>
+    <div class="field" style="border-top:1px solid var(--line);padding-top:14px"><span>Backup</span>
+      <button class="btn block" id="bkDown">Download backup (all months)</button></div>
+    <label class="field"><span>Import (paste a backup or data from Claude)</span><textarea id="impText" rows="3" placeholder='{"months": { ... }}'></textarea></label>
+    <div class="err" id="impErr" hidden></div>
+    <button class="btn block" id="impBtn">Import</button>`);
   $("#closeS").onclick = closeSheet;
+  $("#bkDown").onclick = downloadBackup;
+  $("#impBtn").onclick = () => importData($("#impText").value);
   $("#sSave").onclick = () => {
     const quota = parseFloat($("#sQuota").value), rate = parseFloat($("#sRate").value);
     S.settings = { ...S.settings, quota: quota > 0 ? quota : 80, rate: rate >= 0 ? rate : 18, name: $("#sName").value.trim() };
     saveSettings(); closeSheet(); render(); toast("Settings saved");
   };
+}
+
+async function downloadBackup() {
+  let months;
+  try { months = await Store.listMonths(); } catch { toast("Couldn't read your data for the backup."); return; }
+  const data = JSON.stringify({ app: "work-hours", version: 1, exported: todayKey, settings: S.settings, months }, null, 1);
+  offer(`hours-backup_${todayKey}.json`, new Blob([data], { type: "application/json" }));
+}
+
+/* Merge a backup into the store: adds shifts not already there (same date + start + end), adds missing extras, takes paidUntil. */
+async function importData(text) {
+  const fail = m => { const e = $("#impErr"); if (e) { e.textContent = m; e.hidden = false; } };
+  let obj; try { obj = JSON.parse(text); } catch { fail("That isn't valid backup data. Paste the whole block, from { to }."); return; }
+  const months = obj && obj.months;
+  if (!months || typeof months !== "object") { fail("No months found in that data."); return; }
+  const okT = v => /^\d{2}:\d{2}$/.test(v);
+  let n = 0;
+  try {
+    for (const [key, m] of Object.entries(months)) {
+      if (!/^\d{4}-\d{2}$/.test(key) || !m || typeof m !== "object") continue;
+      const cur = norm(await Store.get("months/" + key));
+      const sig = s => s.date + s.start + s.end, have = new Set(cur.shifts.map(sig));
+      for (const s of Array.isArray(m.shifts) ? m.shifts : []) {
+        if (!s || typeof s.date !== "string" || !s.date.startsWith(key + "-") || !okT(s.start) || !okT(s.end) || have.has(sig(s))) continue;
+        cur.shifts.push({ id: uid(), date: s.date, start: s.start, end: s.end, place: s.place === "home" ? "home" : "office" });
+        have.add(sig(s)); n++;
+      }
+      for (const e of Array.isArray(m.extras) ? m.extras : []) {
+        if (!e || !e.label || cur.extras.some(x => x.label === String(e.label) && +x.amount === +e.amount)) continue;
+        cur.extras.push({ id: uid(), label: String(e.label).slice(0, 80), amount: Math.round((+e.amount || 0) * 100) / 100 });
+      }
+      if (typeof m.paidUntil === "string" && (m.paidUntil === "" || m.paidUntil.startsWith(key + "-"))) cur.paidUntil = m.paidUntil;
+      await Store.save("months/" + key, cur);
+    }
+    if (obj.settings && typeof obj.settings === "object") {
+      const st = obj.settings, next = { ...S.settings };
+      if (typeof st.name === "string") next.name = st.name.slice(0, 80);
+      if (+st.rate >= 0) next.rate = +st.rate;
+      if (+st.quota > 0) next.quota = +st.quota;
+      if (st.lang === "de" || st.lang === "en") next.lang = st.lang;
+      if (typeof st.showPlace === "boolean") next.showPlace = st.showPlace;
+      S.settings = next; saveSettings();
+    }
+  } catch { fail("Import stopped partway. Check your connection and try again; shifts already imported won't be duplicated."); return; }
+  closeSheet(); toast(`Imported ${n} shift${n === 1 ? "" : "s"}`); subscribe(); watchSettings();
 }
 
 let toastT;
@@ -555,9 +692,10 @@ function pdfHeader(doc, title) {
   doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.setTextColor(20);
   doc.text(title, 20, 26);
   doc.setFont("helvetica", "normal"); doc.setFontSize(10.5); doc.setTextColor(100);
-  const sub = [S.settings.name, monthLabel(S.month)].filter(Boolean).join("  ·  ");
-  doc.text(sub, 20, 33);
+  doc.text(pdfSub(), 20, 33);
 }
+const pdfMonth = () => TX().months[+S.month.slice(5) - 1] + " " + S.month.slice(0, 4);
+const pdfSub = () => [S.settings.name, pdfMonth()].filter(Boolean).join("  ·  ");
 const fileBase = () => (S.settings.name ? S.settings.name.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-") + "_" : "") + S.month;
 
 function downloadSheet(mode) {
@@ -565,12 +703,17 @@ function downloadSheet(mode) {
   const all = mode === "all", t = trimmed(), show = !!S.settings.showPlace;
   const rows = all ? t.rows.map(r => ({ ...r, out: r.dur })) : t.rows;
   const total = rows.reduce((a, r) => a + r.out, 0);
-  pdfHeader(doc, all ? "Working hours (all shifts)" : "Working hours");
-  const head = ["Date", "Day", ...(show ? ["Place"] : []), "Start", "End", "Hours"];
-  const body = rows.map(r => [dmy(r.date), WDL[parseDate(r.date).getDay()], ...(show ? [r.place === "home" ? "Home" : "Office"] : []), r.start, fromMin(toMin(r.start) + r.out), dec(r.out)]);
+  const T = TX(), c = T.cols;
+  pdfHeader(doc, all ? T.hoursAll : T.hours);
+  const head = [c.date, c.day, ...(show ? [c.place] : []), c.start, c.end, c.h];
+  const body = [];
+  rows.forEach((r, i) => {
+    if (needsHead(rows, i)) body.push([{ content: T.months[+r.date.slice(5, 7) - 1], colSpan: head.length, styles: { fontStyle: "bold", textColor: 90, fillColor: [242, 243, 240], fontSize: 9 } }]);
+    body.push([dmy(r.date), T.days[parseDate(r.date).getDay()], ...(show ? [r.place === "home" ? T.home : T.office] : []), r.start, fromMin(toMin(r.start) + r.out), T.num(r.out / 60)]);
+  });
   doc.autoTable({
     startY: 42, head: [head], body,
-    foot: [[{ content: "Total", colSpan: head.length - 1 }, dec(total)]],
+    foot: [[{ content: T.total, colSpan: head.length - 1 }, T.num(total / 60)]],
     margin: { left: 20, right: 20 },
     theme: "plain",
     styles: { font: "helvetica", fontSize: 10, cellPadding: { top: 2.6, bottom: 2.6, left: 2, right: 2 }, textColor: 30, lineColor: 225, lineWidth: { bottom: 0.2 } },
@@ -584,19 +727,19 @@ function downloadSheet(mode) {
     doc.setDrawColor(150); doc.setLineWidth(0.3);
     doc.line(20, y, 85, y); doc.line(125, y, 190, y);
     doc.setFontSize(8.5); doc.setTextColor(120);
-    doc.text("Date", 20, y + 5); doc.text("Signature", 125, y + 5);
+    doc.text(T.signDate, 20, y + 5); doc.text(T.sign, 125, y + 5);
   }
-  offer(`${all ? "Hours-all" : "Hours"}_${fileBase()}.pdf`, doc.output("blob"));
+  offer(`${all ? T.files.all : T.files.hours}_${fileBase()}.pdf`, doc.output("blob"));
 }
 
 /* Small A5 invoice, no table: one line per item, a rule, the sum. */
 function downloadBill() {
   const doc = newDoc("a5"); if (!doc) return;
-  const b = billParts(), L = 18, R = 130;
+  const b = billParts(), L = 18, R = 130, T = TX();
   doc.setFont("helvetica", "bold"); doc.setFontSize(16); doc.setTextColor(20);
-  doc.text("Overtime bill", L, 26);
+  doc.text(T.bill, L, 26);
   doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); doc.setTextColor(110);
-  doc.text([S.settings.name, monthLabel(S.month)].filter(Boolean).join("  ·  "), L, 33);
+  doc.text(pdfSub(), L, 33);
   let y = 50;
   const line = (label, detail, amount) => {
     doc.setFontSize(10.5); doc.setTextColor(30); doc.text(doc.splitTextToSize(label, 70)[0], L, y);
@@ -604,21 +747,21 @@ function downloadBill() {
     doc.setFontSize(10.5); doc.setTextColor(30); doc.text(amount, R, y, { align: "right" });
     y += 9;
   };
-  if (b.ot) line("Overtime", `${dec(b.ot)} h x ${eur(b.rate)}`, eur(b.otPay));
-  S.data.extras.forEach(e => line(e.label, "", eur(+e.amount || 0)));
+  if (b.ot) line(T.ot, `${T.num(b.ot / 60)} h x ${T.money(b.rate)}`, T.money(b.otPay));
+  S.data.extras.forEach(e => line(e.label, "", T.money(+e.amount || 0)));
   y += 1; doc.setDrawColor(60); doc.setLineWidth(0.4); doc.line(L, y - 5, R, y - 5);
   doc.setFont("helvetica", "bold"); doc.setFontSize(12.5); doc.setTextColor(20);
-  doc.text("Total", L, y + 2); doc.text(eur(b.total), R, y + 2, { align: "right" });
+  doc.text(T.sum, L, y + 2); doc.text(T.money(b.total), R, y + 2, { align: "right" });
   doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(130);
-  doc.text(`Issued ${dmy(todayKey)}`, L, y + 18);
-  offer(`Overtime-bill_${fileBase()}.pdf`, doc.output("blob"));
+  doc.text(`${T.issued} ${dmy(todayKey)}`, L, y + 18);
+  offer(`${T.files.bill}_${fileBase()}.pdf`, doc.output("blob"));
 }
 
 /* ---------- wiring ---------- */
 function shiftMonth(delta) {
   const [y, m] = S.month.split("-").map(Number); const d = new Date(y, m - 1 + delta, 1);
   S.month = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; lsSet("hrs.month", S.month);
-  S.data = { shifts: [], extras: [], seed: 1 }; render(); subscribe();
+  S.data = norm(null); S.prev = norm(null); render(); subscribe();
 }
 $("#prev").onclick = () => shiftMonth(-1);
 $("#next").onclick = () => shiftMonth(1);
