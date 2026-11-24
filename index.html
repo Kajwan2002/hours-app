@@ -368,8 +368,10 @@ function render() {
 }
 
 function renderShifts() {
-  const carried = carriedIn().sort(byTime);
-  const list = S.data.shifts.map(s => ({ ...s, _m: S.month })).sort(byTime);
+  // Newest first: latest shift at the top, last month's carried shifts at the bottom
+  const newest = (a, b) => byTime(b, a);
+  const carried = carriedIn().sort(newest);
+  const list = S.data.shifts.map(s => ({ ...s, _m: S.month })).sort(newest);
   const nextName = monthName(addMonths(S.month, 1));
   const row = s => { const d = parseDate(s.date), later = s._m === S.month && isLater(s); return `
         <button class="shift${later ? " later" : ""}" data-id="${esc(s.id)}" data-m="${s._m}">
@@ -380,7 +382,7 @@ function renderShifts() {
   const carriedHtml = carried.length ? `<div class="section"><div class="label" style="display:flex;justify-content:space-between"><span>From ${monthName(prevKey())} · after paid date</span><span class="num">${hm(carried.reduce((t, s) => t + durOf(s), 0))}</span></div><div class="list">${carried.map(row).join("")}</div></div>` : "";
   const bind = () => { const all = [...carried, ...list]; document.querySelectorAll(".shift").forEach(b => b.onclick = () => openShift(all.find(s => s.id === b.dataset.id && s._m === b.dataset.m), b.dataset.m)); };
   if (!list.length) {
-    $("#view").innerHTML = carriedHtml + `<div class="section"><div class="empty"><b>No shifts in ${esc(monthLabel(S.month))}</b>Tap <strong>Add shift</strong> to log your first day. Office is selected by default.</div></div>`;
+    $("#view").innerHTML = `<div class="section"><div class="empty"><b>No shifts in ${esc(monthLabel(S.month))}</b>Tap <strong>Add shift</strong> to log your first day. Office is selected by default.</div></div>` + carriedHtml;
     bind(); return;
   }
   // split into weeks for readability
@@ -390,11 +392,11 @@ function renderShifts() {
     const k = mon.toDateString(); let w = weeks.find(x => x.k === k);
     if (!w) weeks.push(w = { k, mon, items: [] }); w.items.push(s);
   });
-  $("#view").innerHTML = carriedHtml + weeks.map(w => {
+  $("#view").innerHTML = weeks.map(w => {
     const sum = w.items.filter(s => !isLater(s)).reduce((t, s) => t + durOf(s), 0);
     return `<div class="section"><div class="label" style="display:flex;justify-content:space-between"><span>Week of ${w.mon.getDate()} ${MONTHS[w.mon.getMonth()].slice(0,3)}</span><span class="num">${hm(sum)}</span></div>
       <div class="list">${w.items.map(row).join("")}</div></div>`;
-  }).join("");
+  }).join("") + carriedHtml;
   bind();
 }
 
