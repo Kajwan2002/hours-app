@@ -136,6 +136,12 @@ td{border-bottom:1px solid var(--line)}
 td.r,th.r{text-align:right}
 tfoot td{font-weight:700;border-bottom:0}
 .cut{color:var(--over);font-size:.72rem;margin-left:4px}
+.dl{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-top:1px solid var(--line)}
+.dl:first-child{border-top:0}
+.dl>div{min-width:0}
+.dl b{display:block;font-weight:600}
+.dl span{display:block;font-size:.8rem;color:var(--muted)}
+.dl .btn{padding:8px 14px;flex:none}
 .hint{font-size:.82rem;color:var(--muted);margin:8px 2px 0}
 .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 .actions .btn{flex:1 1 auto}
@@ -225,6 +231,7 @@ const todayKey = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(toda
 const S = {
   month: lsGet("hrs.month", todayKey.slice(0, 7)),
   tab: "shifts",
+  exportView: "80",
   settings: { name: "", rate: 18, quota: 80, showPlace: false },
   data: { shifts: [], extras: [], seed: 1 },
   loaded: false,
@@ -395,35 +402,57 @@ function renderOvertime() {
   $("#dlBill").onclick = downloadBill;
 }
 
+const billParts = () => {
+  const ot = otMin(), rate = +S.settings.rate || 0;
+  const otPay = Math.round(ot / 60 * rate * 100) / 100;
+  const exSum = S.data.extras.reduce((t, e) => t + (+e.amount || 0), 0);
+  return { ot, rate, otPay, exSum, total: otPay + exSum };
+};
+
 function renderExport() {
+  const all = S.exportView === "all";
   const t = trimmed(), show = !!S.settings.showPlace;
-  const outTot = t.rows.reduce((a, r) => a + r.out, 0);
-  const tot = totalMin(), q = quotaMin();
+  const rows = all ? t.rows.map(r => ({ ...r, out: r.dur })) : t.rows;
+  const outTot = rows.reduce((a, r) => a + r.out, 0);
+  const tot = totalMin(), q = quotaMin(), b = billParts();
+  const nEx = S.data.extras.length;
   let msg;
-  if (!t.rows.length) msg = "Add shifts to see the export.";
+  if (!rows.length) msg = "Add shifts to see the export.";
+  else if (all) msg = `Every shift exactly as you logged it, ${hm(tot)} in total.`;
   else if (tot <= q) msg = `You logged ${hm(tot)} of ${hm(q)}. Nothing is trimmed; all shifts are exported as they are.`;
-  else msg = `Logged ${hm(tot)}. ${hm(t.cut)} of overtime removed in small cuts across ${t.touched} shift${t.touched === 1 ? "" : "s"}, home days first. The sheet shows exactly ${hm(outTot)}.`;
+  else msg = `Logged ${hm(tot)}. ${hm(t.cut)} of overtime removed in small cuts across ${t.touched} shift${t.touched === 1 ? "" : "s"}, home days first. The sheet shows exactly ${hm(outTot)}. The red marks only show here, not in the PDF.`;
+  const has = t.rows.length > 0, hasBill = b.ot > 0 || nEx > 0;
   $("#view").innerHTML = `
+  <div class="section"><div class="label">Downloads · ${esc(monthLabel(S.month))}</div>
+    <div class="list">
+      <div class="dl"><div><b>${+S.settings.quota || 80} h sheet</b><span class="num">For your employer · ${hm(Math.min(tot, q))}</span></div><button class="btn primary" id="dl80" ${has ? "" : "disabled"}>PDF</button></div>
+      <div class="dl"><div><b>All hours</b><span class="num">Every shift as logged · ${hm(tot)}</span></div><button class="btn" id="dlAll" ${has ? "" : "disabled"}>PDF</button></div>
+      <div class="dl"><div><b>Overtime bill</b><span class="num">${hm(b.ot)} h × ${eur(b.rate)}${nEx ? ` + ${nEx} extra` : ""} = ${eur(b.total)}</span></div><button class="btn" id="dlBill2" ${hasBill ? "" : "disabled"}>PDF</button></div>
+    </div></div>
   <div class="section"><div class="label">Sheet details</div>
     <div class="card" style="display:flex;flex-direction:column;gap:12px">
-      <label class="field"><span>Name on the sheet</span><input type="text" id="nameIn" placeholder="Your name" value="${esc(S.settings.name)}"></label>
+      <label class="field"><span>Name on the exports</span><input type="text" id="nameIn" placeholder="Your name" value="${esc(S.settings.name)}"></label>
       <label class="switch"><span>Show Office / Home column</span><input type="checkbox" id="placeIn" ${show ? "checked" : ""}></label>
     </div></div>
-  <div class="section"><div class="label" style="display:flex;justify-content:space-between"><span>Preview · ${esc(monthLabel(S.month))}</span><span class="num">${hm(outTot)}</span></div>
-    ${t.rows.length ? `<div class="sheet-preview"><table>
+  <div class="section"><div class="label" style="display:flex;justify-content:space-between"><span>Preview</span><span class="num">${hm(outTot)}</span></div>
+    <div class="seg" id="viewSeg" style="margin-bottom:10px">
+      <button type="button" data-v="80" aria-pressed="${!all}">${+S.settings.quota || 80} h sheet</button>
+      <button type="button" data-v="all" aria-pressed="${all}">All hours</button></div>
+    ${rows.length ? `<div class="sheet-preview"><table>
       <thead><tr><th>Date</th><th>Day</th>${show ? "<th>Place</th>" : ""}<th>Start</th><th>End</th><th class="r">Hours</th></tr></thead>
-      <tbody>${t.rows.map(r => `<tr><td class="num">${dmy(r.date)}</td><td>${WD[parseDate(r.date).getDay()]}</td>${show ? `<td>${r.place === "home" ? "Home" : "Office"}</td>` : ""}<td class="num">${esc(r.start)}</td><td class="num">${fromMin(toMin(r.start) + r.out)}${r.out !== r.dur ? `<span class="cut">−${hm(r.dur - r.out)}</span>` : ""}</td><td class="r num">${dec(r.out)}</td></tr>`).join("")}</tbody>
+      <tbody>${rows.map(r => `<tr><td class="num">${dmy(r.date)}</td><td>${WD[parseDate(r.date).getDay()]}</td>${show ? `<td>${r.place === "home" ? "Home" : "Office"}</td>` : ""}<td class="num">${esc(r.start)}</td><td class="num">${fromMin(toMin(r.start) + r.out)}${r.out !== r.dur ? `<span class="cut">−${hm(r.dur - r.out)}</span>` : ""}</td><td class="r num">${dec(r.out)}</td></tr>`).join("")}</tbody>
       <tfoot><tr><td colspan="${show ? 5 : 4}">Total</td><td class="r num">${dec(outTot)}</td></tr></tfoot>
     </table></div>` : ""}
-    <p class="hint">${esc(msg)} The red marks only show here, not in the PDF.</p>
-    <div class="actions">
-      ${tot > q ? `<button class="btn" id="reshuffle">Shuffle cuts</button>` : ""}
-      <button class="btn primary" id="dlSheet" ${t.rows.length ? "" : "disabled"}>Download hours (PDF)</button>
-    </div></div>`;
+    <p class="hint">${esc(msg)}</p>
+    ${!all && tot > q ? `<div class="actions"><button class="btn" id="reshuffle">Shuffle cuts</button></div>` : ""}
+  </div>`;
   let nt; $("#nameIn").oninput = e => { S.settings.name = e.target.value; clearTimeout(nt); nt = setTimeout(saveSettings, 600); };
   $("#placeIn").onchange = e => { S.settings.showPlace = e.target.checked; saveSettings(); render(); };
+  document.querySelectorAll("#viewSeg button").forEach(btn => btn.onclick = () => { S.exportView = btn.dataset.v; render(); });
   const rs = $("#reshuffle"); if (rs) rs.onclick = () => { S.data.seed = Math.floor(Math.random() * 1e9); saveMonth(); render(); };
-  $("#dlSheet").onclick = downloadSheet;
+  $("#dl80").onclick = () => downloadSheet("80");
+  $("#dlAll").onclick = () => downloadSheet("all");
+  $("#dlBill2").onclick = downloadBill;
 }
 
 /* ---------- sheets (modals) ---------- */
@@ -518,9 +547,9 @@ async function offer(filename, blob) {
     else toast("Couldn't save the file.");
   }
 }
-function newDoc() {
+function newDoc(format = "a4") {
   if (!window.jspdf || !window.jspdf.jsPDF) { toast("PDF tools are still loading. Try again."); return null; }
-  return new window.jspdf.jsPDF({ unit: "mm", format: "a4" });
+  return new window.jspdf.jsPDF({ unit: "mm", format });
 }
 function pdfHeader(doc, title) {
   doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.setTextColor(20);
@@ -531,13 +560,14 @@ function pdfHeader(doc, title) {
 }
 const fileBase = () => (S.settings.name ? S.settings.name.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-") + "_" : "") + S.month;
 
-function downloadSheet() {
+function downloadSheet(mode) {
   const doc = newDoc(); if (!doc) return;
-  const t = trimmed(), show = !!S.settings.showPlace;
-  const total = t.rows.reduce((a, r) => a + r.out, 0);
-  pdfHeader(doc, "Working hours");
+  const all = mode === "all", t = trimmed(), show = !!S.settings.showPlace;
+  const rows = all ? t.rows.map(r => ({ ...r, out: r.dur })) : t.rows;
+  const total = rows.reduce((a, r) => a + r.out, 0);
+  pdfHeader(doc, all ? "Working hours (all shifts)" : "Working hours");
   const head = ["Date", "Day", ...(show ? ["Place"] : []), "Start", "End", "Hours"];
-  const body = t.rows.map(r => [dmy(r.date), WDL[parseDate(r.date).getDay()], ...(show ? [r.place === "home" ? "Home" : "Office"] : []), r.start, fromMin(toMin(r.start) + r.out), dec(r.out)]);
+  const body = rows.map(r => [dmy(r.date), WDL[parseDate(r.date).getDay()], ...(show ? [r.place === "home" ? "Home" : "Office"] : []), r.start, fromMin(toMin(r.start) + r.out), dec(r.out)]);
   doc.autoTable({
     startY: 42, head: [head], body,
     foot: [[{ content: "Total", colSpan: head.length - 1 }, dec(total)]],
@@ -556,28 +586,32 @@ function downloadSheet() {
     doc.setFontSize(8.5); doc.setTextColor(120);
     doc.text("Date", 20, y + 5); doc.text("Signature", 125, y + 5);
   }
-  offer(`Hours_${fileBase()}.pdf`, doc.output("blob"));
+  offer(`${all ? "Hours-all" : "Hours"}_${fileBase()}.pdf`, doc.output("blob"));
 }
 
+/* Small A5 invoice, no table: one line per item, a rule, the sum. */
 function downloadBill() {
-  const doc = newDoc(); if (!doc) return;
-  const ot = otMin(), rate = +S.settings.rate || 0, otPay = Math.round(ot / 60 * rate * 100) / 100;
-  const exSum = S.data.extras.reduce((t, e) => t + (+e.amount || 0), 0);
-  pdfHeader(doc, "Overtime & expenses");
-  const body = [];
-  if (ot) body.push([`Overtime (${hm(ot)} h above ${+S.settings.quota || 80} h)`, `${dec(ot)} h × ${eur(rate)}`, eur(otPay)]);
-  S.data.extras.forEach(e => body.push([e.label, "", eur(+e.amount || 0)]));
-  doc.autoTable({
-    startY: 42, head: [["Description", "", "Amount"]], body,
-    foot: [[{ content: "Total due", colSpan: 2 }, eur(otPay + exSum)]],
-    margin: { left: 20, right: 20 }, theme: "plain",
-    styles: { font: "helvetica", fontSize: 10.5, cellPadding: { top: 3, bottom: 3, left: 2, right: 2 }, textColor: 30, lineColor: 225, lineWidth: { bottom: 0.2 } },
-    headStyles: { fontStyle: "bold", textColor: 110, fontSize: 8.5, lineWidth: { bottom: 0.5 }, lineColor: 60 },
-    footStyles: { fontStyle: "bold", fontSize: 12, textColor: 20, lineWidth: { top: 0.5 }, lineColor: 60 },
-    columnStyles: { 1: { textColor: 110 }, 2: { halign: "right" } },
-    didParseCell: d => { if (d.column.index === 2) d.cell.styles.halign = "right"; },
-  });
-  offer(`Overtime_${fileBase()}.pdf`, doc.output("blob"));
+  const doc = newDoc("a5"); if (!doc) return;
+  const b = billParts(), L = 18, R = 130;
+  doc.setFont("helvetica", "bold"); doc.setFontSize(16); doc.setTextColor(20);
+  doc.text("Overtime bill", L, 26);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); doc.setTextColor(110);
+  doc.text([S.settings.name, monthLabel(S.month)].filter(Boolean).join("  ·  "), L, 33);
+  let y = 50;
+  const line = (label, detail, amount) => {
+    doc.setFontSize(10.5); doc.setTextColor(30); doc.text(doc.splitTextToSize(label, 70)[0], L, y);
+    if (detail) { doc.setTextColor(120); doc.setFontSize(9.5); doc.text(detail, 90, y, { align: "right" }); }
+    doc.setFontSize(10.5); doc.setTextColor(30); doc.text(amount, R, y, { align: "right" });
+    y += 9;
+  };
+  if (b.ot) line("Overtime", `${dec(b.ot)} h x ${eur(b.rate)}`, eur(b.otPay));
+  S.data.extras.forEach(e => line(e.label, "", eur(+e.amount || 0)));
+  y += 1; doc.setDrawColor(60); doc.setLineWidth(0.4); doc.line(L, y - 5, R, y - 5);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(12.5); doc.setTextColor(20);
+  doc.text("Total", L, y + 2); doc.text(eur(b.total), R, y + 2, { align: "right" });
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(130);
+  doc.text(`Issued ${dmy(todayKey)}`, L, y + 18);
+  offer(`Overtime-bill_${fileBase()}.pdf`, doc.output("blob"));
 }
 
 /* ---------- wiring ---------- */
