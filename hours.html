@@ -788,6 +788,22 @@ document.querySelectorAll(".tab").forEach(t => t.onclick = () => { S.tab = t.dat
 
 render();
 
+/* GitHub Pages copy only: if a newer version is online, refresh the cached copy and reload once. */
+const checkUpdate = async () => {
+  const meta = document.querySelector('meta[name="app-build"]');
+  if (!meta || $("#sheetHost").innerHTML) return; // never reload while a form is open
+  try {
+    const html = await (await fetch(location.pathname, { cache: "reload" })).text();
+    const live = (html.match(/name="app-build" content="(\d+)"/) || [])[1];
+    if (live && live !== meta.content && sessionStorage.getItem("hrs.reloadedFor") !== live) {
+      sessionStorage.setItem("hrs.reloadedFor", live);
+      location.reload();
+    }
+  } catch {}
+};
+checkUpdate();
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkUpdate(); });
+
 (async () => {
   let db = null;
   try { if (window.claude && window.claude.use) { db = await window.claude.use("db"); downloads = await window.claude.use("downloads"); } } catch {}
