@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#F2F3F0" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#101214" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#EBEDE9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0D0F11" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="app-build" content="20261124140650">
+<meta name="app-build" content="20261124140922">
 <style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px/1.4 system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
 </head>
 <body><title>Work Hours</title>
@@ -17,7 +17,7 @@
 <style>
 /* Layout: one-column phone app — month header, tabbed content, fixed bottom tab bar, bottom sheets for editing */
 :root{
-  --bg:#F2F3F0; --surface:#FFFFFF; --ink:#15181C; --muted:#6A7077; --line:#E0E2DD;
+  --bg:#EBEDE9; --surface:#FFFFFF; --ink:#15181C; --muted:#656B72; --line:#DDE0DA;
   --accent:#2457D6; --accent-ink:#FFFFFF; --accent-soft:#E6ECFB;
   --home:#A86A12; --home-soft:#F7ECD9; --office:#3C4A5C; --office-soft:#E7EAEE;
   --over:#C2410C; --danger:#B42318;
@@ -26,12 +26,12 @@
   --r:14px;
 }
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
-  --bg:#101214; --surface:#1A1D21; --ink:#ECEDEA; --muted:#959BA3; --line:#2A2F35;
+  --bg:#0D0F11; --surface:#1B1F24; --ink:#ECEDEA; --muted:#98A0A8; --line:#2C3138;
   --accent:#7099FF; --accent-ink:#0D1220; --accent-soft:#1D2742;
   --home:#E3A94C; --home-soft:#33271394; --office:#B4C0D0; --office-soft:#262C34;
   --over:#FB8B5B; --danger:#F97066; color-scheme:dark}}
 :root[data-theme="dark"]{
-  --bg:#101214; --surface:#1A1D21; --ink:#ECEDEA; --muted:#959BA3; --line:#2A2F35;
+  --bg:#0D0F11; --surface:#1B1F24; --ink:#ECEDEA; --muted:#98A0A8; --line:#2C3138;
   --accent:#7099FF; --accent-ink:#0D1220; --accent-soft:#1D2742;
   --home:#E3A94C; --home-soft:#33271394; --office:#B4C0D0; --office-soft:#262C34;
   --over:#FB8B5B; --danger:#F97066; color-scheme:dark}
@@ -164,6 +164,21 @@ textarea{width:100%;border:1px solid var(--line);background:var(--bg);border-rad
 .calc{display:flex;justify-content:space-between;align-items:baseline;background:var(--accent-soft);border-radius:12px;padding:12px 14px}
 .calc b{font-size:1.4rem;font-weight:500}
 .err{color:var(--danger);font-size:.85rem}
+
+/* --- clarity pass: separate summary, groups, tabs --- */
+.summary{background:var(--accent-soft);border-color:transparent}
+.summary .bar{background:var(--surface)}
+.section{margin-top:24px}
+.label .num{background:var(--surface);border:1px solid var(--line);border-radius:99px;padding:1px 9px;color:var(--ink);letter-spacing:0;text-transform:none;font-weight:500;font-size:.78rem}
+.list,.card,.sheet-preview{box-shadow:0 1px 2px rgba(20,25,35,.05)}
+.day{border-radius:10px;padding:6px 0;text-align:center;background:var(--office-soft)}
+.day.home{background:var(--home-soft)}
+.day.home b{color:var(--home)}
+.tabs{box-shadow:0 -4px 16px rgba(20,25,35,.06)}
+.tab svg{box-sizing:content-box;padding:4px 16px;border-radius:99px;transition:background .15s}
+.tab[aria-selected="true"] svg{background:var(--accent-soft)}
+.kv.total{background:var(--accent-soft);margin:10px -16px -16px;padding:14px 16px;border-top:0;border-radius:0 0 var(--r) var(--r)}
+@media (prefers-reduced-motion:reduce){.tab svg{transition:none}}
 
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(140px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:99px;font-size:.88rem;z-index:30;font-weight:500}
 </style>
@@ -370,7 +385,7 @@ function renderShifts() {
   const nextName = monthName(addMonths(S.month, 1));
   const row = s => { const d = parseDate(s.date), later = s._m === S.month && isLater(s); return `
         <button class="shift${later ? " later" : ""}" data-id="${esc(s.id)}" data-m="${s._m}">
-          <div class="day"><b class="num">${pad(d.getDate())}</b><span>${WD[d.getDay()]}</span></div>
+          <div class="day ${s.place === "home" ? "home" : "office"}"><b class="num">${pad(d.getDate())}</b><span>${WD[d.getDay()]}</span></div>
           <div class="mid"><span class="times num">${esc(s.start)}–${esc(s.end)}</span><span class="chip ${s.place === "home" ? "home" : "office"}">${s.place === "home" ? "Home" : "Office"}</span>${later ? `<span class="chip next">→ ${nextName}</span>` : ""}</div>
           <div class="dur num">${hm(durOf(s))}</div>
         </button>`; };

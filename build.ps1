@@ -7,8 +7,8 @@ $head = @'
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#F2F3F0" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#101214" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#EBEDE9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0D0F11" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="app-build" content="__BUILD__">
