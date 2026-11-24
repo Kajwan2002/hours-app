@@ -7,7 +7,7 @@
 <meta name="theme-color" content="#101214" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="app-build" content="20261124140315">
+<meta name="app-build" content="20261124140650">
 <style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px/1.4 system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
 </head>
 <body><title>Work Hours</title>
@@ -188,9 +188,7 @@ textarea{width:100%;border:1px solid var(--line);background:var(--bg);border-rad
       <div class="stat"><span>Shifts</span><b class="num" id="stShifts">0</b></div>
       <div class="stat"><span>Left to <i id="stQuota">80</i>h</span><b class="num" id="stLeft">80:00</b></div>
       <div class="stat ot"><span>Overtime</span><b class="num" id="stOt">0:00</b></div>
-    </div>
-    <p class="period" id="periodNote" hidden></p>
-  </section>
+    </div>  </section>
   <p class="notice" id="storeNote" hidden></p>
 
   <main id="view"></main>
@@ -356,10 +354,6 @@ function render() {
   $("#barNormal").style.width = (Math.min(tot, q) / scale * 100) + "%";
   $("#barOt").style.width = (ot / scale * 100) + "%";
   $("#stShifts").textContent = periodRows().length;
-  const ci = carriedIn(), pn = [];
-  if (ci.length) pn.push(`Includes ${hm(ci.reduce((t, s) => t + durOf(s), 0))} from ${monthName(prevKey())} (after ${shortDate(S.prev.paidUntil)})`);
-  if (S.data.paidUntil) pn.push(`Paid until ${shortDate(S.data.paidUntil)}, later shifts count for ${monthName(addMonths(S.month, 1))}`);
-  $("#periodNote").textContent = pn.join(" · "); $("#periodNote").hidden = !pn.length;
   $("#stQuota").textContent = +S.settings.quota || 80;
   $("#stLeft").textContent = hm(Math.max(0, q - tot));
   $("#stOt").textContent = hm(ot);
@@ -496,8 +490,6 @@ function renderExport() {
   const lang = S.settings.lang === "en" ? "en" : "de";
   const nextName = monthName(addMonths(S.month, 1));
   const [py, pm] = S.month.split("-").map(Number);
-  const ci = carriedIn();
-  if (ci.length && rows.length) msg += ` Includes ${ci.length} shift${ci.length === 1 ? "" : "s"} from ${monthName(prevKey())} after you were paid.`;
   $("#view").innerHTML = `
   <div class="section"><div class="label">Downloads · ${esc(monthLabel(S.month))}</div>
     <div class="list">
@@ -733,38 +725,58 @@ const pdfMonth = () => TX().months[+S.month.slice(5) - 1] + " " + S.month.slice(
 const pdfSub = () => [S.settings.name, pdfMonth()].filter(Boolean).join("  ·  ");
 const fileBase = () => (S.settings.name ? S.settings.name.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-") + "_" : "") + S.month;
 
+/* Always one A4 page: shrink rows (font + padding) until the table and signature fit. */
 function downloadSheet(mode) {
-  const doc = newDoc(); if (!doc) return;
-  const all = mode === "all", t = trimmed(), show = !!S.settings.showPlace;
-  const rows = all ? t.rows.map(r => ({ ...r, out: r.dur })) : t.rows;
+  if (!window.jspdf || !window.jspdf.jsPDF) { toast("PDF tools are still loading. Try again."); return; }
+  const rowsN = sheetRows(mode).length + 3;           // body + head + foot + month dividers (approx.)
+  const avail = 297 - 42 - 12 - 26;                   // page − header − bottom margin − signature
+  let s = Math.min(1, avail / (rowsN * 9.3));         // 9.3 mm ≈ one row at full size
+  let doc;
+  for (let i = 0; i < 12; i++) {
+    doc = buildSheet(mode, s);
+    if (doc.getNumberOfPages() === 1) break;
+    s *= 0.92;
+  }
+  const T = TX();
+  offer(`${mode === "all" ? T.files.all : T.files.hours}_${fileBase()}.pdf`, doc.output("blob"));
+}
+const sheetRows = mode => { const t = trimmed(); return mode === "all" ? t.rows.map(r => ({ ...r, out: r.dur })) : t.rows; };
+
+function buildSheet(mode, s) {
+  const doc = newDoc();
+  const all = mode === "all", show = !!S.settings.showPlace;
+  const fs = Math.max(5.5, 10 * Math.min(1, s * 1.1)), pad = Math.max(0.35, 2.6 * s);
+  const rows = sheetRows(mode);
   const total = rows.reduce((a, r) => a + r.out, 0);
   const T = TX(), c = T.cols;
   pdfHeader(doc, all ? T.hoursAll : T.hours);
   const head = [c.date, c.day, ...(show ? [c.place] : []), c.start, c.end, c.h];
   const body = [];
   rows.forEach((r, i) => {
-    if (needsHead(rows, i)) body.push([{ content: T.months[+r.date.slice(5, 7) - 1], colSpan: head.length, styles: { fontStyle: "bold", textColor: 90, fillColor: [242, 243, 240], fontSize: 9 } }]);
+    if (needsHead(rows, i)) body.push([{ content: T.months[+r.date.slice(5, 7) - 1], colSpan: head.length, styles: { fontStyle: "bold", textColor: 90, fillColor: [242, 243, 240], fontSize: fs * 0.9 } }]);
     body.push([dmy(r.date), T.days[parseDate(r.date).getDay()], ...(show ? [r.place === "home" ? T.home : T.office] : []), r.start, fromMin(toMin(r.start) + r.out), T.num(r.out / 60)]);
   });
   doc.autoTable({
     startY: 42, head: [head], body,
     foot: [[{ content: T.total, colSpan: head.length - 1 }, T.num(total / 60)]],
-    margin: { left: 20, right: 20 },
+    margin: { left: 20, right: 20, bottom: 12 },
     theme: "plain",
-    styles: { font: "helvetica", fontSize: 10, cellPadding: { top: 2.6, bottom: 2.6, left: 2, right: 2 }, textColor: 30, lineColor: 225, lineWidth: { bottom: 0.2 } },
-    headStyles: { fontStyle: "bold", textColor: 110, fontSize: 8.5, lineWidth: { bottom: 0.5 }, lineColor: 60 },
-    footStyles: { fontStyle: "bold", fontSize: 11, textColor: 20, lineWidth: { top: 0.5 }, lineColor: 60 },
+    styles: { font: "helvetica", fontSize: fs, cellPadding: { top: pad, bottom: pad, left: 2, right: 2 }, textColor: 30, lineColor: 225, lineWidth: { bottom: 0.2 } },
+    headStyles: { fontStyle: "bold", textColor: 110, fontSize: fs * 0.85, lineWidth: { bottom: 0.5 }, lineColor: 60 },
+    footStyles: { fontStyle: "bold", fontSize: fs * 1.1, textColor: 20, lineWidth: { top: 0.5 }, lineColor: 60 },
     columnStyles: { [head.length - 1]: { halign: "right" } },
     didParseCell: d => { if (d.column.index === head.length - 1) d.cell.styles.halign = "right"; },
   });
-  const y = doc.lastAutoTable.finalY + 22;
-  if (y < 270) {
+  // Signature lines: below the table, never on a second page
+  if (doc.getNumberOfPages() === 1) {
+    const y = doc.lastAutoTable.finalY + 18;
+    if (y > 285) { doc.addPage(); return doc; } // no room for the signature: forces a smaller retry
     doc.setDrawColor(150); doc.setLineWidth(0.3);
     doc.line(20, y, 85, y); doc.line(125, y, 190, y);
     doc.setFontSize(8.5); doc.setTextColor(120);
     doc.text(T.signDate, 20, y + 5); doc.text(T.sign, 125, y + 5);
   }
-  offer(`${all ? T.files.all : T.files.hours}_${fileBase()}.pdf`, doc.output("blob"));
+  return doc;
 }
 
 /* Small A5 invoice, no table: one line per item, a rule, the sum. */
