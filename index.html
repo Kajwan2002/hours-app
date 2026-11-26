@@ -7,7 +7,7 @@
 <meta name="theme-color" content="#0D0F11" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="app-build" content="20261124141021">
+<meta name="app-build" content="20261126215301">
 <style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px/1.4 system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
 </head>
 <body><title>Work Hours</title>
@@ -164,6 +164,11 @@ textarea{width:100%;border:1px solid var(--line);background:var(--bg);border-rad
 .calc{display:flex;justify-content:space-between;align-items:baseline;background:var(--accent-soft);border-radius:12px;padding:12px 14px}
 .calc b{font-size:1.4rem;font-weight:500}
 .err{color:var(--danger);font-size:.85rem}
+
+.tpick{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:4px}
+.tpick b{color:var(--muted);font-weight:500}
+.tpick select{width:100%;min-width:0;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:10px;padding:10px 8px;font:500 17px var(--f-mono);font-variant-numeric:tabular-nums;text-align:center;text-align-last:center;-webkit-appearance:none;appearance:none}
+.tpick select:focus{outline:none;border-color:var(--accent)}
 
 /* --- clarity pass: separate summary, groups, tabs --- */
 .summary{background:var(--accent-soft);border-color:transparent}
@@ -555,6 +560,19 @@ function sheet(html) {
 }
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeSheet(); });
 
+/* Time picker: hour wheel (00–23) + minute wheel in quarter hours. A saved odd minute (e.g. :07) is kept as an extra option. */
+function timePicker(id, value) {
+  const [h, m] = String(value || "09:00").split(":");
+  const mins = ["00", "15", "30", "45"];
+  if (m && !mins.includes(m)) mins.push(m), mins.sort();
+  const opt = (v, sel) => `<option value="${v}"${v === sel ? " selected" : ""}>${v}</option>`;
+  return `<div class="tpick">
+    <select id="${id}H" aria-label="Hour">${Array.from({ length: 24 }, (_, i) => opt(pad(i), h)).join("")}</select>
+    <b>:</b>
+    <select id="${id}M" aria-label="Minutes">${mins.map(v => opt(v, m)).join("")}</select></div>`;
+}
+const tpVal = id => $("#" + id + "H").value + ":" + $("#" + id + "M").value;
+
 function defaultDate() {
   if (todayKey.startsWith(S.month)) return todayKey;
   return S.month + "-01";
@@ -574,19 +592,19 @@ function openShift(existing, mk = S.month) {
       <button type="button" data-v="office" aria-pressed="${s.place !== "home"}">Office</button>
       <button type="button" data-v="home" aria-pressed="${s.place === "home"}">Home</button></div></div>
     <div class="row2">
-      <label class="field"><span>Start</span><input type="time" id="fStart" value="${s.start}"></label>
-      <label class="field"><span>End</span><input type="time" id="fEnd" value="${s.end}"></label>
+      <div class="field"><span>Start</span>${timePicker("fStart", s.start)}</div>
+      <div class="field"><span>End</span>${timePicker("fEnd", s.end)}</div>
     </div>
     <div class="calc"><span>Hours</span><b class="num" id="fCalc">0:00</b></div>
     <div class="err" id="fErr" hidden></div>
     <button class="btn primary block" id="fSave">${existing ? "Save changes" : "Save shift"}</button>
     ${existing ? `<button class="btn ghost danger block" id="fDel">Delete shift</button>` : ""}`);
-  const calc = () => { const st = $("#fStart").value, en = $("#fEnd").value; $("#fCalc").textContent = st && en ? hm(durOf({ start: st, end: en })) + (toMin(en) <= toMin(st) ? " (overnight)" : "") : "–"; };
-  ["fStart", "fEnd"].forEach(id => $("#" + id).oninput = calc); calc();
+  const calc = () => { const st = tpVal("fStart"), en = tpVal("fEnd"); $("#fCalc").textContent = st && en ? hm(durOf({ start: st, end: en })) + (toMin(en) <= toMin(st) ? " (overnight)" : "") : "–"; };
+  document.querySelectorAll(".tpick select").forEach(el => el.onchange = calc); calc();
   document.querySelectorAll("#fPlace button").forEach(b => b.onclick = () => { s.place = b.dataset.v; document.querySelectorAll("#fPlace button").forEach(x => x.setAttribute("aria-pressed", x === b)); });
   $("#closeS").onclick = closeSheet;
   $("#fSave").onclick = () => {
-    const date = $("#fDate").value, start = $("#fStart").value, end = $("#fEnd").value, err = $("#fErr");
+    const date = $("#fDate").value, start = tpVal("fStart"), end = tpVal("fEnd"), err = $("#fErr");
     if (!date || !date.startsWith(mk)) { err.textContent = `Pick a date in ${monthLabel(mk)}. Switch months at the top to log other months.`; err.hidden = false; return; }
     if (!start || !end) { err.textContent = "Enter both a start and an end time."; err.hidden = false; return; }
     if (start === end) { err.textContent = "Start and end are the same time."; err.hidden = false; return; }
